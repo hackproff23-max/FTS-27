@@ -1,0 +1,13 @@
+package defpackage;
+
+/* JADX INFO: loaded from: classes.dex */
+public final class bg extends bv {
+    public static bg a = new bg(0);
+    public static bg b = new bg(1);
+    public static bg c = new bg(2);
+    public static bg d = new bg(3);
+
+    private bg(int i) {
+        super(i);
+    }
+}

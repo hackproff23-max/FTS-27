@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TableLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="horizontal"
+    android:background="@drawable/background2"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:stretchColumns="4">
+    <TextView
+        android:textSize="20dp"
+        android:textColor="#ffffffff"
+        android:gravity="center"
+        android:padding="26dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=" "/>
+    <TableRow
+        android:gravity="left"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:layout_marginBottom="3dp">
+        <Button
+            android:textColor="#ffffffff"
+            android:background="@drawable/boton_enviar_perfil"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="SendProfileQuestion"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_borrar_partido"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="DeleteSaveMatchQuestion"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_borrar_repeticiones"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="DeleteReplaysQuestion"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_datos"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="ResetCustomDataQuestion"/>
+    </TableRow>
+    <TableRow
+        android:gravity="left"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:layout_marginBottom="3dp">
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_trofeos"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="ResetEndOfSeasonCupsQuestion"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_restablecer_la_temporada"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="ResetCurrentRegularSeasonQuestion"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_perfil"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="ResetProfileQuestion"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_soporte"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="SupportRestoreQuestion"/>
+    </TableRow>
+    <TableRow
+        android:gravity="left"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:layout_marginBottom="3dp">
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_obb"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="instalarObb"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_data"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="instalarData"/>
+        <Button
+            android:textColor="#00000000"
+            android:background="@drawable/boton_salir"
+            android:layout_width="175dp"
+            android:layout_height="80dp"
+            android:text=" "
+            android:onClick="ExitSafeModeQuestion"/>
+    </TableRow>
+    <TextView
+        android:id="@+id/textResult"
+        android:padding="20dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=" "/>
+</TableLayout>

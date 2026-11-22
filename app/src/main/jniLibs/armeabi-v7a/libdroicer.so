@@ -1,0 +1,822 @@
+// FTS14-style decorated panels for FTS26: translucent fill + a stadium photo
+// background (one of 11, picked per panel instance) + mirrored rounded
+// corners + top/bottom highlight lines, drawn over CFEPanel's normal render,
+// with the original flat-color box border suppressed.
+function floatBits(f) {
+    var buf = Memory.alloc(4);
+    buf.writeFloat(f);
+    return buf.readU32();
+}
+
+function install() {
+    var mod = Process.getModuleByName("libFTS15.so");
+    var GHIDRA_DELTA = 0x10000;
+    function A(off) { return mod.base.add(off - GHIDRA_DELTA); }
+
+    var ADDR = {
+        DrawPanel:           A(0x002081c0),
+        RenderForeground:    A(0x00208640),
+        GetDrawPosition:     A(0x001edd5c),
+        GetDrawDimensions:   A(0x001eddb8),
+        FETU_GetImage:       A(0x001e5b84),
+        FTS2D_DrawTexScale:  A(0x001e0014),
+        FTS2D_DrawRectCol5:  A(0x001dfe28),
+        FTS2D_DrawBox_thunk: A(0x00147d44),
+        FE_GetScreen:        mod.base.add(0x001a0a74), // real vaddr, no Ghidra delta (int FE_GetScreen())
+    };
+    // FE_GetScreen() returns a small integer that varies per screen, but
+    // it's actually a navigation-order-dependent stack position rather than
+    // a fixed per-screen-type id (confirmed: the same panel got a different
+    // number after every relaunch) -- kept anyway per the user's choice,
+    // since it still gives DIFFERENT screens DIFFERENT numbers within one
+    // continuous play session, which is enough to stop cross-screen
+    // repetition even though it won't look identical run to run.
+    //
+    // It crashed the app once with just a flat 5s-since-script-load warmup
+    // (SIGBUS) -- that timer doesn't reliably correlate with when the
+    // engine's internal state it reads is actually initialized. Now gated
+    // on BOTH a longer time warmup AND a minimum number of already-succeeded
+    // DrawPanel calls (a real activity signal, not a guessed duration) --
+    // the counter only advances from inside DrawPanel's own try/catch below,
+    // so it can only reach the threshold once panels are genuinely
+    // rendering successfully.
+    var fnFEGetScreen = new NativeFunction(ADDR.FE_GetScreen, 'int32', []);
+    var installTime = Date.now();
+    var FE_GETSCREEN_WARMUP_MS = 8000;
+    var FE_GETSCREEN_MIN_DRAWS = 30;
+    var successfulDrawCount = 0;
+    function currentScreenID() {
+        if (Date.now() - installTime < FE_GETSCREEN_WARMUP_MS) return -1;
+        if (successfulDrawCount < FE_GETSCREEN_MIN_DRAWS) return -1;
+        try { return fnFEGetScreen(); } catch (e) { return -1; }
+    }
+
+    var fnGetDrawPosition = new NativeFunction(ADDR.GetDrawPosition, 'void', ['pointer', 'pointer', 'pointer']);
+    var fnGetDrawDimensions = new NativeFunction(ADDR.GetDrawDimensions, 'void', ['pointer', 'pointer', 'pointer']);
+    var fnGetImage = new NativeFunction(ADDR.FETU_GetImage, 'void', ['pointer', 'pointer', 'uint32', 'int32', 'uint32', 'uint32']);
+    var fnDrawTexScale = new NativeFunction(ADDR.FTS2D_DrawTexScale, 'void', ['pointer', 'uint32', 'uint32', 'uint32', 'uint32']);
+    var fnDrawRectCol5 = new NativeFunction(ADDR.FTS2D_DrawRectCol5, 'void', ['uint32', 'uint32', 'uint32', 'uint32', 'uint32']);
+
+    var NUM_BACKGROUNDS = 30;
+    var bgPaths = [];
+    var bgImgs = [];
+    for (var bi = 1; bi <= NUM_BACKGROUNDS; bi++) {
+        bgPaths.push(Memory.allocUtf8String("PKG:/data/fe/ui/fe_back" + bi + ".png"));
+        bgImgs.push(Memory.alloc(24));
+    }
+    // Assignment keyed by (screen id, panel position), not by memory
+    // pointer/discovery order (which differ launch to launch) and not by
+    // position alone either -- position alone collided across DIFFERENT
+    // screens that happen to lay out a row at the same slot (most menus
+    // share the same list-row template). FE_GetScreen() (see above) gives a
+    // real per-screen id straight from the game engine, so folding it into
+    // the key makes every screen's panels get their own independent set of
+    // photos, without needing to know or hardcode which named screen is
+    // which -- any screen id this hasn't seen before just gets a fresh
+    // deterministic slot the same way an unseen position always did.
+    // Falls back to position-only keying if the screen id isn't available
+    // yet (e.g. during FE_GETSCREEN_WARMUP_MS right after launch).
+    function hashKey(key) {
+        var h = 0;
+        for (var i = 0; i < key.length; i++) {
+            h = (h * 31 + key.charCodeAt(i)) >>> 0;
+        }
+        return h;
+    }
+    var bgAssignment = {};    // "screenID:posKey" -> image index (permanent, for cross-run consistency)
+    function isIndexTaken(idx) {
+        for (var k in bgAssignment) {
+            if (bgAssignment[k] === idx) return true;
+        }
+        return false;
+    }
+    function pickBgIndexForScreenPosition(screenID, x, y) {
+        var key = (screenID >= 0 ? screenID : 'w') + ':' + Math.round(x / 4) + ',' + Math.round(y / 4);
+        if (key in bgAssignment) return bgAssignment[key];
+        var idx = hashKey(key) % NUM_BACKGROUNDS;
+        var attempts = 0;
+        while (isIndexTaken(idx) && attempts < NUM_BACKGROUNDS) {
+            idx = (idx + 1) % NUM_BACKGROUNDS;
+            attempts++;
+        }
+        // If every slot really is taken, idx has wrapped back to where it
+        // started -- that's fine, it just means this panel shares its
+        // image with exactly one other (unavoidable once distinct panels
+        // outnumber the photo pool), rather than silently colliding with a
+        // random one via a wiped tracker.
+        bgAssignment[key] = idx;
+        return idx;
+    }
+
+    var cornerPath = Memory.allocUtf8String("PKG:/data/fe/panel/panelCorner.png");
+    var cornerImg = Memory.alloc(24);
+    var linePath = Memory.allocUtf8String("PKG:/data/fe/panel/panel_line_highlight.png");
+    var lineImg = Memory.alloc(24);
+
+    var xBuf = Memory.alloc(4), yBuf = Memory.alloc(4), wBuf = Memory.alloc(4), hBuf = Memory.alloc(4);
+
+    var CORNER_SIZE = 8.0;
+    var FILL_COLOR = 0x77202020;
+
+    Interceptor.attach(ADDR.DrawPanel, {
+        onEnter: function (args) { this.panel = args[0]; },
+        onLeave: function () {
+            try {
+                fnGetDrawPosition(this.panel, xBuf, yBuf);
+                fnGetDrawDimensions(this.panel, wBuf, hBuf);
+                var x = xBuf.readFloat(), y = yBuf.readFloat();
+                var w = wBuf.readFloat(), h = hBuf.readFloat();
+                successfulDrawCount++; // real "panels are rendering" signal, gates currentScreenID()'s first call
+                var idx = pickBgIndexForScreenPosition(currentScreenID(), x, y);
+                if (!(idx >= 0 && idx < NUM_BACKGROUNDS)) idx = 0; // never hand a bad index to the native calls below
+                fnGetImage(bgImgs[idx], bgPaths[idx], 0, -1, 0, 0);
+                fnDrawTexScale(bgImgs[idx], floatBits(x), floatBits(y), floatBits(w), floatBits(h));
+                fnDrawRectCol5(floatBits(x), floatBits(y), floatBits(w), floatBits(h), FILL_COLOR);
+            } catch (e) { /* ignore transient panels with no valid size yet */ }
+        }
+    });
+
+    Interceptor.attach(ADDR.RenderForeground, {
+        onEnter: function (args) { this.panel = args[0]; },
+        onLeave: function () {
+            try {
+                fnGetImage(cornerImg, cornerPath, 0, -1, 0, 0);
+                fnGetImage(lineImg, linePath, 0, -1, 0, 0);
+                fnGetDrawPosition(this.panel, xBuf, yBuf);
+                fnGetDrawDimensions(this.panel, wBuf, hBuf);
+                var x = xBuf.readFloat(), y = yBuf.readFloat();
+                var w = wBuf.readFloat(), h = hBuf.readFloat();
+
+                var cs = CORNER_SIZE;
+                fnDrawTexScale(cornerImg, floatBits(x), floatBits(y + cs), floatBits(cs), floatBits(-cs));
+                fnDrawTexScale(cornerImg, floatBits(x + w), floatBits(y + cs), floatBits(-cs), floatBits(-cs));
+                fnDrawTexScale(cornerImg, floatBits(x), floatBits(y + h - cs), floatBits(cs), floatBits(cs));
+                fnDrawTexScale(cornerImg, floatBits(x + w), floatBits(y + h - cs), floatBits(-cs), floatBits(cs));
+
+                var lineH = 6.0;
+                fnDrawTexScale(lineImg, floatBits(x + cs), floatBits(y - 5.0), floatBits(w - 2 * cs), floatBits(lineH));
+                fnDrawTexScale(lineImg, floatBits(x + cs), floatBits(y + h - lineH), floatBits(w - 2 * cs), floatBits(lineH));
+            } catch (e) { /* ignore transient panels with no valid size yet */ }
+        }
+    });
+
+    Interceptor.replace(ADDR.FTS2D_DrawBox_thunk, new NativeCallback(function () {
+        // no-op: suppress the original flat-color panel border
+    }, 'void', ['uint32', 'uint32', 'uint32', 'uint32', 'uint32', 'uint32']));
+
+    installInfiniteCoins(mod);
+    installDifficultyTuning(mod);
+    installHalfLengthLabels(mod);
+    installWorldTrophyUnlock(mod);
+    installGameOptionsExtraRows(mod);
+    installSubsLimit(mod);
+    installHalfLengthTuning(mod);
+    installHalfLengthProbe(mod);
+}
+
+// Changes the match-duration option set from {1,3,5,20,45} to {1,2,3,5,45},
+// AND reorders both parallel arrays so cycling the option goes 1,2,3,5,45 in
+// ascending order (confirmed working in-game: applying "2" really shortened
+// the match, i.e. MP_iHalfLengths IS what drives the real single-player
+// duration, not just multiplayer despite the "MP_" prefix).
+//
+// iHalfLengthOps holds the SAME numbers as installHalfLengthLabels' ids
+// (677/678/679/680/682 == 0x2a5/0x2a6/0x2a7/0x2a8/0x2aa exactly, same gap at
+// 681/0x2a9) -- not a coincidence: this is the per-slot text-id array the
+// renderer looks up via LookupString for the CURRENTLY SELECTED index, the
+// same pattern installGameOptionsExtraRows uses for its own rows
+// (coinsValueLabelIds/subsValueLabelIds). So reordering which CODE sits at
+// which index moves the label with it, WITHOUT changing what any code's
+// text means -- 678 still means "3" and 679 still means "5" globally, so
+// installGameOptionsExtraRows' reuse of those two ids for its own "Cantidad
+// de cambios" row (SUBS_VALUE_TEXT_IDS) is completely unaffected; only
+// WHICH duration-slot asks for them changes.
+function installHalfLengthTuning(mod) {
+    var MP_iHalfLengths = mod.base.add(0x006c3cac); // real minutes, per-index
+    var iHalfLengthOps  = mod.base.add(0x006c4ab0); // per-index text-id, read by the renderer
+
+    var beforeMin = [], beforeOps = [];
+    for (var i = 0; i < 5; i++) {
+        beforeMin.push(MP_iHalfLengths.add(i * 4).readS32());
+        beforeOps.push(iHalfLengthOps.add(i * 4).readS32());
+    }
+    coinLog("halflen tuning before min=" + JSON.stringify(beforeMin) + " ops=" + JSON.stringify(beforeOps));
+
+    var newMin = [1, 2, 3, 5, 45];       // ascending real minutes
+    var newOps = [677, 680, 678, 679, 682]; // matching text-ids: 1,2,3,5,45
+
+    for (var i = 0; i < 5; i++) {
+        MP_iHalfLengths.add(i * 4).writeS32(newMin[i]);
+        iHalfLengthOps.add(i * 4).writeS32(newOps[i]);
+    }
+
+    var afterMin = [], afterOps = [];
+    for (var i = 0; i < 5; i++) {
+        afterMin.push(MP_iHalfLengths.add(i * 4).readS32());
+        afterOps.push(iHalfLengthOps.add(i * 4).readS32());
+    }
+    coinLog("halflen tuning after min=" + JSON.stringify(afterMin) + " ops=" + JSON.stringify(afterOps));
+}
+
+// Read-only probe (no gameplay changes) to confirm which arg register
+// carries the actual value and which table ("MP_iHalfLengths" real minutes
+// {1,3,5,20,45} vs "iHalfLengthOps" codes {677,678,679,680,682}) it comes
+// from, before deciding how to hook/patch match duration for real. Logs
+// once per call to coin_debug.log; remove once confirmed.
+function installHalfLengthProbe(mod) {
+    var SetHalfLength = mod.base.add(0x0030853c); // CMatchSetup::SetHalfLength(int), real vaddr
+    var MP_iHalfLengths = mod.base.add(0x006c3cac); // {1,3,5,20,45}
+    var iHalfLengthOps  = mod.base.add(0x006c4ab0); // {677,678,679,680,682}
+
+    var mpVals = [], opVals = [];
+    for (var i = 0; i < 5; i++) {
+        mpVals.push(MP_iHalfLengths.add(i * 4).readS32());
+        opVals.push(iHalfLengthOps.add(i * 4).readS32());
+    }
+    coinLog("halflen probe tables MP_iHalfLengths=" + JSON.stringify(mpVals) + " iHalfLengthOps=" + JSON.stringify(opVals));
+
+    Interceptor.attach(SetHalfLength, {
+        onEnter: function (args) {
+            coinLog("SetHalfLength called a0=" + args[0].toInt32() + " a1=" + args[1].toInt32() + " a2=" + args[2].toInt32());
+        }
+    });
+}
+
+// Adds a 6th row to the native "Opciones del juego" tab (CFESOptions,
+// tab index 0 -- the one the user confirmed has exactly 5 rows) so
+// Monedas Infinitas can be toggled from inside the game's own settings
+// menu, not just the Configuracion mod-menu tab.
+//
+// This tab's CFEMenu is allocated via CFEMenu::CFEMenu(this, 5, ...) --
+// the "5" sizes the option-record array to EXACTLY 5 slots (0x40 bytes
+// each). Calling SetOption for a 6th slot without first growing that
+// allocation would write past the end of it and corrupt the heap, so the
+// constructor call is intercepted (only when called from inside
+// CFESOptions::InitMenu's own tab-0 branch, tracked via a "which tab is
+// InitMenu currently building" flag set for the duration of that single
+// call) and the count bumped from 5 to 6 before the real constructor runs
+// -- letting its own allocator size the array correctly the first time,
+// rather than trying to grow it after the fact.
+//
+// The option's VALUE labels ("APAGADO"/"ENCENDIDO") are set via
+// CFEMenu::SetOptionText, which takes literal wchar_t* strings directly
+// (no localized text-id lookup needed for those). The option's OWN NAME
+// label has no such literal-string setter, only CFEMenu::SetOptionTextID
+// (an int text-id, resolved through the game's own FTSstring() table at
+// render time). Real ids found by probing LookupString() (installTextIdProbe)
+// while browsing menus that already show this style of option: text id
+// 0x5d = "Creditos" (single word, matches this feature's meaning), used
+// for the option's own NAME. For the two VALUE labels, style-1 (toggle)
+// options turned out to render via this SAME text-id table (record+0x10,
+// SetOption's own param_4/fallbackLabelIds), NOT via SetOptionText's
+// literal wchar_t* array (that only appears to apply to style-2/range
+// options) -- so "APAGADO"/"ENCENDIDO" were silently ignored on-screen.
+// Fixed by using real ids 0x3f = "No" and 0x40 = "Si" (found right next
+// to this same tab's own option labels in the probe log, i.e. already
+// used by a genuine Si/No-style option elsewhere in this exact menu
+// system) instead of literal strings.
+//
+// A second row, "Cantidad de cambios" (multi-value, same kind as the
+// existing "Duracion de un tiempo"/"Tipo de camara"), was added the same
+// way -- see SUBS_OPTION_INDEX below. Its 5 values (3,4,5,6,7) reuse ids
+// 0x2a6/0x2a7 ("3"/"5", already shown elsewhere by installHalfLengthLabels)
+// and 3 more ids repurposed via the SAME LookupString-override technique
+// for "4", "6", "7" and the row's own "CAMBIOS" name (see
+// installHalfLengthLabels). Its backing value drives GetNumSubsLeft's
+// hardcoded "5" via installSubsLimit below, the actual gate used by both
+// CPU and human substitution checks (CTeamManagement::CanSwapPlayersByID,
+// SUB_SubstitutionCPUProcess) -- confirmed via Ghidra caller analysis.
+//
+// FIXED cosmetic issue (cambios row's name/value text overlap + arrows
+// rendering edge-to-edge, narrow "230px box" look): this row originally
+// used style 2 on the assumption that multi-value/range options need it
+// (vs style 1 for the coins on/off toggle). Two failed attempts chased
+// SetOption's param_9 and the record's +0x24 EFontAlign field. The real
+// cause, found by dumping option[2] ("Tipo de camara", a known-good
+// native multi-value row) byte-for-byte and comparing: it uses STYLE 1,
+// not 2 -- min/max (0..4 there, 0..5 here) is what actually makes an
+// option multi-valued, independent of style. CFEMenu::GetOptionRect (real
+// vaddr 0x1f33b8) has a style==2-specific branch that overrides the row's
+// rect to a fixed 230px-wide box -- that's what was actually causing the
+// glitch. Fixed by simply using style 1 (matching "Tipo de camara"
+// exactly), which also fixes the name alignment on its own -- no manual
+// field patch needed.
+function installGameOptionsExtraRows(mod) {
+    var ADDR = {
+        InitMenu:        mod.base.add(0x234818), // CFESOptions::InitMenu(int tabIndex), real vaddr
+        CFEMenu_ctor:    mod.base.add(0x1f16a0), // CFEMenu::CFEMenu(this,int count,int* labelIds,int,int,EMenuStyle), real vaddr
+        SetOption:       mod.base.add(0x1f1ea8), // CFEMenu::SetOption(...), real vaddr
+        SetOptionTextID: mod.base.add(0x1f37e0), // CFEMenu::SetOptionTextID(int,int), real vaddr
+    };
+    var COINS_NAME_TEXT_ID = 0x5d;  // "Creditos"
+    var COINS_OFF_TEXT_ID = 0x3f;   // "No"
+    var COINS_ON_TEXT_ID = 0x40;    // "Si"
+    var COINS_OPTION_INDEX = 5;     // 6th slot (0-indexed)
+
+    var SUBS_NAME_TEXT_ID = 0x3ad;  // repurposed -> "CAMBIOS" (installHalfLengthLabels)
+    var SUBS_VALUE_TEXT_IDS = [0x2a6, 0xafb, 0x2a7, 0x552, 0xafa]; // "3","4","5","6","7"
+    var SUBS_VALUES = [3, 4, 5, 6, 7];
+    var SUBS_OPTION_INDEX = 6;      // 7th slot (0-indexed)
+
+    var TOTAL_OPTIONS = 7;          // original 5 + coins + cambios
+    var GAME_OPTIONS_TAB = 0;       // the InitMenu tab index confirmed to originally have 5 rows
+
+    var fnSetOption = new NativeFunction(ADDR.SetOption, 'void',
+        ['pointer', 'int32', 'int32', 'int32', 'pointer', 'int32', 'int32', 'pointer', 'uint32', 'pointer', 'int32']);
+    var fnSetOptionTextID = new NativeFunction(ADDR.SetOptionTextID, 'void', ['pointer', 'int32', 'int32']);
+
+    // Backing value for the coins option -- a plain native int Frida owns
+    // outright, kept in sync with the SAME infiniteCoinsEnabled flag that
+    // gates GetCredits/SubtractCredits in installInfiniteCoins above. This
+    // native menu row is now the ONLY control surface for the flag (the
+    // old Android-side Configuracion toggle was removed).
+    var coinsFlagPtr = Memory.alloc(4);
+    coinsFlagPtr.writeS32(infiniteCoinsEnabled ? 1 : 0);
+    var lastSeenFlagValue = coinsFlagPtr.readS32();
+
+    // Backing value for the cambios option -- holds the SELECTED INDEX
+    // (0..4) into SUBS_VALUES, same convention CFEMenu itself uses for
+    // range options. Mapped to the actual sub count for installSubsLimit.
+    var subsIndexPtr = Memory.alloc(4);
+    subsIndexPtr.writeS32(2); // default index 2 -> 5, matches the original hardcoded limit
+    var lastSeenSubsIndex = subsIndexPtr.readS32();
+
+    setInterval(function () {
+        try {
+            var current = coinsFlagPtr.readS32();
+            if (current !== lastSeenFlagValue) {
+                lastSeenFlagValue = current;
+                infiniteCoinsEnabled = current !== 0;
+                coinLog("game-options coins toggle changed via native menu: " + infiniteCoinsEnabled);
+            } else if (lastSeenFlagValue !== (infiniteCoinsEnabled ? 1 : 0)) {
+                // Android-side toggle changed instead -- push it into the native flag too.
+                lastSeenFlagValue = infiniteCoinsEnabled ? 1 : 0;
+                coinsFlagPtr.writeS32(lastSeenFlagValue);
+            }
+            var subsIdx = subsIndexPtr.readS32();
+            if (subsIdx !== lastSeenSubsIndex) {
+                lastSeenSubsIndex = subsIdx;
+                subsLimitValue = SUBS_VALUES[clampIndex(subsIdx, SUBS_VALUES.length - 1)];
+                coinLog("game-options cambios changed via native menu: " + subsLimitValue);
+            }
+        } catch (e) {}
+    }, 500);
+
+    // The actual on-screen value labels: a text-id array (record+0x10,
+    // SetOption's param_4), read directly by the renderer using the
+    // option's current value as the index -- true for both style-1
+    // (toggle) and style-2 (range) options.
+    var coinsValueLabelIds = Memory.alloc(8);
+    coinsValueLabelIds.add(0).writeS32(COINS_OFF_TEXT_ID);
+    coinsValueLabelIds.add(4).writeS32(COINS_ON_TEXT_ID);
+
+    var subsValueLabelIds = Memory.alloc(SUBS_VALUE_TEXT_IDS.length * 4);
+    for (var si = 0; si < SUBS_VALUE_TEXT_IDS.length; si++) {
+        subsValueLabelIds.add(si * 4).writeS32(SUBS_VALUE_TEXT_IDS[si]);
+    }
+
+    var buildingTab = -999; // which InitMenu tab is currently being (re)built, or -999 if none
+
+    Interceptor.attach(ADDR.InitMenu, {
+        onEnter: function (args) {
+            this.thisPtr = args[0];
+            this.tabIndex = args[1].toInt32();
+            buildingTab = this.tabIndex;
+        },
+        onLeave: function () {
+            buildingTab = -999;
+            if (this.tabIndex !== GAME_OPTIONS_TAB) return;
+            var menuPtr;
+            try {
+                menuPtr = this.thisPtr.add(0xf0).readPointer();
+                if (menuPtr.isNull()) return;
+            } catch (e0) {
+                coinLog("game-options extra rows: menuPtr read failed: " + e0);
+                return;
+            }
+            // Each call isolated in its own try/catch -- a failure in one
+            // must not prevent the others from running (a prior attempt
+            // shared one try block and a crash on the FIRST call silently
+            // skipped every row, see installGameOptionsExtraRows's header
+            // comment about the ptr(0xbf800000) experiment).
+            try {
+                fnSetOption(menuPtr, COINS_OPTION_INDEX, 1, 0, coinsValueLabelIds, 0, 2, coinsFlagPtr, floatBits(1.0), ptr(0), 0);
+                fnSetOptionTextID(menuPtr, COINS_OPTION_INDEX, COINS_NAME_TEXT_ID);
+                coinLog("game-options coins row added to menu " + menuPtr);
+            } catch (e1) {
+                coinLog("game-options coins row failed: " + e1);
+            }
+            try {
+                // The real fix for the overlap/edge-to-edge glitch: a
+                // direct byte dump of option[2] ("Tipo de camara", a known-
+                // good native multi-value row) vs this row showed "Tipo de
+                // camara" uses STYLE 1, not 2 -- the assumption that
+                // multi-value/range options need style 2 was simply wrong;
+                // style only needs to be 2 for something else (GetOptionRect,
+                // real vaddr 0x1f33b8, has a style==2-specific branch that
+                // overrides the row's rect to a fixed 230px-wide box,
+                // exactly matching the observed narrow/edge-to-edge glitch).
+                // min/max (0..5) is what actually makes this a 5-value
+                // selector, independent of style. Switched to style 1 to
+                // match the native pattern exactly, which also makes the
+                // name-alignment default correct on its own (no more need
+                // for the +0x24 manual override this used to need).
+                fnSetOption(menuPtr, SUBS_OPTION_INDEX, 1, 0, subsValueLabelIds, 0, SUBS_VALUES.length, subsIndexPtr, floatBits(1.0), ptr(0), 0);
+                fnSetOptionTextID(menuPtr, SUBS_OPTION_INDEX, SUBS_NAME_TEXT_ID);
+                coinLog("game-options cambios row added to menu " + menuPtr);
+            } catch (e2) {
+                coinLog("game-options cambios row failed: " + e2);
+            }
+        }
+    });
+
+    Interceptor.attach(ADDR.CFEMenu_ctor, {
+        // CFEMenu::CFEMenu(this, count, labelIds, param_3, param_4, style) --
+        // count (args[1]) sizes the option-record array. param_4 (args[4],
+        // stack slot 0 on ARM32 since only r0-r3 are register args) is a
+        // SEPARATE "selectable/navigable count" fed into Setup() and later
+        // compared per-option in SetOption ("index < this+0xa8" decides
+        // whether that row accepts input focus at all) -- only bumping
+        // count left this at the original 5, so new rows rendered as plain
+        // text with no way to select/toggle them. Both need to grow together.
+        onEnter: function (args) {
+            if (buildingTab === GAME_OPTIONS_TAB && args[1].toInt32() === 5) {
+                args[1] = ptr(TOTAL_OPTIONS); // grow the allocation from 5 to 7 slots
+                if (args[4].toInt32() === 5) {
+                    args[4] = ptr(TOTAL_OPTIONS); // grow the selectable-count too
+                }
+            }
+        }
+    });
+}
+
+// Backing value for installGameOptionsExtraRows's "Cantidad de cambios"
+// row, read by installSubsLimit below. Declared at top level since both
+// functions reference it.
+var subsLimitValue = 5; // default matches the original hardcoded limit
+
+// CTeam::GetNumSubsLeft(int,int,bool) is the ONE authoritative substitution
+// gate -- confirmed via Ghidra caller analysis: both
+// CTeamManagement::CanSwapPlayersByID (the human player's own substitution
+// attempt) and SUB_SubstitutionCPUProcess (AI-controlled teams) call it
+// and bail out when it returns < 1. Its own body just does
+// "return 5 - used;" -- the "5" is a plain hardcoded literal, not read
+// from any struct/config field. Rather than reimplementing its internal
+// used-subs counting logic (which varies its own count by the bool arg),
+// this inverts the function's own formula: used = 5 - originalReturn,
+// then replaces the return with subsLimitValue - used.
+function installSubsLimit(mod) {
+    var GetNumSubsLeft = mod.base.add(0x0031748c); // CTeam::GetNumSubsLeft(int,int,bool), real vaddr
+    coinLog("install subs limit hook GetNumSubsLeft=" + GetNumSubsLeft);
+    Interceptor.attach(GetNumSubsLeft, {
+        onLeave: function (retval) {
+            var used = 5 - retval.toInt32();
+            var newLimit = subsLimitValue - used;
+            if (newLimit < 0) newLimit = 0;
+            retval.replace(newLimit);
+        }
+    });
+}
+
+// "Monedas Infinitas" toggle -- now driven ONLY by the native in-game
+// "Opciones del juego" menu row (see installGameOptionsExtraRows's
+// coinsFlagPtr sync below). The old Android-side Configuracion mod-menu
+// button (arjuna.am.power.CoinsButton, SharedPreferences "GAMECONFIG"/
+// "INFCOINS") and its menu screen were removed from the APK layout, and
+// the polling loop that used to read that prefs file into
+// infiniteCoinsEnabled every second was removed here too -- it was
+// unconditionally stomping the native menu's own value back to the last
+// frozen prefs-file state on every poll, fighting the native toggle.
+//
+// CMyProfile::GetCredits()/SetCredits(int) are both just a 3-instruction
+// "ldr/str this+0x8a70; bx lr" -- too small for Interceptor to hook at all.
+// Hooking CMyProfile::CMyProfile() (the constructor) to grab the singleton
+// pointer instead ALSO crashed the process on every launch (same fault
+// address every time, ruled out Java.perform as the cause by removing it
+// first and still crashing) -- the constructor runs during very early
+// static-init bootstrap, apparently too early/fragile a point for Frida's
+// inline hook here even though the function itself decompiles cleanly.
+//
+// Hooking CCredits::SubtractCredits(int) instead: it only ever runs later,
+// during normal interactive gameplay (whenever the player actually spends
+// credits), well past the fragile bootstrap window, and confirmed a
+// normal-sized/safely-hookable function by disassembly. Zeroing out the
+// amount argument before the original runs makes spending a no-op --
+// "infinite" via never depleting, without writing to any struct offset or
+// needing the CMyProfile singleton pointer at all.
+var infiniteCoinsEnabled = false;
+var COIN_LOG_PATH = "/storage/emulated/0/Android/data/com.FTS27.giiodroicerargaming/files/coin_debug.log";
+function coinLog(msg) {
+    try {
+        var f = new File(COIN_LOG_PATH, "a");
+        f.write(new Date().toISOString() + " " + msg + "\n");
+        f.flush();
+        f.close();
+    } catch (e) {}
+}
+
+function installInfiniteCoins(mod) {
+    var GetCredits = mod.base.add(0x00134990); // CMyProfile::GetCredits() PLT thunk
+    var SubtractCredits = mod.base.add(0x001c3730); // CCredits::SubtractCredits(int)
+    coinLog("install coin hook GetCredits=" + GetCredits);
+    coinLog("install coin hook SubtractCredits=" + SubtractCredits);
+    Interceptor.attach(GetCredits, {
+        onLeave: function (retval) {
+            if (infiniteCoinsEnabled) {
+                retval.replace(999999999);
+            }
+        }
+    });
+    Interceptor.attach(SubtractCredits, {
+        onEnter: function (args) {
+            coinLog("SubtractCredits hit enabled=" + infiniteCoinsEnabled + " a0=" + args[0] + " a1=" + args[1] + " a2=" + args[2] + " a3=" + args[3]);
+            if (infiniteCoinsEnabled) {
+                args[0] = ptr(0);
+                coinLog("SubtractCredits amount forced to 0");
+            }
+        }
+    });
+}
+
+function clampIndex(v, max) {
+    if (v < 0) return 0;
+    if (v > max) return max;
+    return v;
+}
+
+function tuneDifficultyLevel(raw) {
+    if (raw <= 0) return 0;      // Baja: queda igual.
+    if (raw <= 2) return raw === 1 ? 250 : 400;
+    if (raw < 300) return 270;   // Media: bajada un poco (antes 300).
+    return 400;                  // Alta: al maximo de la escala original.
+}
+
+function installDifficultyTuning(mod) {
+    var SetCPUDifficulty = mod.base.add(0x003085d8);    // CMatchSetup::SetCPUDifficulty(int)
+    var GDIFF_SetDifficulty = mod.base.add(0x002b3104); // GDIFF_SetDifficulty(TCPUAIDifficulty*, int)
+    coinLog("install difficulty hooks SetCPUDifficulty=" + SetCPUDifficulty + " GDIFF_SetDifficulty=" + GDIFF_SetDifficulty);
+
+    Interceptor.attach(SetCPUDifficulty, {
+        onEnter: function (args) {
+            var original = args[0].toInt32();
+            var level = tuneDifficultyLevel(original);
+            coinLog("SetCPUDifficulty original=" + original + " tuned=" + level);
+            args[0] = ptr(level);
+        }
+    });
+
+    Interceptor.attach(GDIFF_SetDifficulty, {
+        onEnter: function (args) {
+            var original = args[1].toInt32();
+            var level = tuneDifficultyLevel(original);
+            this.diffPtr = args[0];
+            this.boostHigh = level >= 400;
+            coinLog("GDIFF_SetDifficulty original=" + original + " tuned=" + level);
+            args[1] = ptr(level);
+        },
+        onLeave: function () {
+            if (!this.boostHigh || this.diffPtr.isNull()) return;
+            try {
+                // GDIFF_SetDifficulty (decompiled) fills every field below via
+                // XMATH_InterpolateClamp(level, 0, 400, START, END) -- for
+                // MOST of them START > END, i.e. the stored value already
+                // goes DOWN as difficulty goes up (these read like error
+                // margins / reaction delays / mistake-probability style
+                // stats: smaller = better AI). Only 3 fields have
+                // START < END (stored value goes UP with difficulty --
+                // genuine "bigger is harder" stats). The old version
+                // multiplied every field by the same factor regardless of
+                // direction, so at a big multiplier the 16 "smaller is
+                // harder" fields swelled up and made the AI easier overall,
+                // fighting the 3 fields that were correctly getting harder
+                // -- that's why 10.4x played EASIER than 2.6x.
+                var INCREASING = { 0x14: true, 0x34: true, 0x44: true }; // bigger value = harder
+                var BOOST = 10.0; // per direct user request, jumping from 5.85x
+                for (var off = 0x0c; off <= 0x58; off += 4) {
+                    var value = this.diffPtr.add(off).readS32();
+                    if (value <= 0 || value >= 0x20000000) continue;
+                    var boosted = INCREASING[off]
+                        ? Math.floor(value * BOOST)      // push further up
+                        : Math.max(1, Math.floor(value / BOOST)); // push further down, never to 0
+                    this.diffPtr.add(off).writeS32(boosted);
+                }
+                coinLog("GDIFF high boost applied (direction-aware, factor=" + BOOST + ")");
+            } catch (e) {
+                coinLog("GDIFF high boost failed: " + e);
+            }
+        }
+    });
+}
+
+function installHalfLengthLabels(mod) {
+    var LookupString = mod.base.add(0x0013f34c);
+    var labels = {
+        0x2a5: Memory.allocUtf16String("1"),
+        0x2a6: Memory.allocUtf16String("3"),
+        0x2a7: Memory.allocUtf16String("5"),
+        // Was "20" -- changed to "2" per user request. This id (0x2a8) isn't
+        // shared with installGameOptionsExtraRows' "Cantidad de cambios" row
+        // (that one reuses 0x2a6/0x2a7 for its own "3"/"5"), so relabeling it
+        // is safe and doesn't touch any other screen's text.
+        0x2a8: Memory.allocUtf16String("2"),
+        0x2aa: Memory.allocUtf16String("45"),
+        // Repurposed for the new "Cantidad de cambios" row
+        // (installGameOptionsExtraRows) -- these ids' original text
+        // ("Hogar, dulce hogar" / "VIP" / "No has guardado ninguna
+        // repeticion." / "No hay repeticiones disponibles") only shows on
+        // obscure/rarely-visited screens, confirmed safe-to-call via the
+        // text-id probe log, and picked specifically so this override's
+        // minor collateral (those screens briefly showing a number/
+        // "CAMBIOS" instead) is low-impact.
+        0xafa: Memory.allocUtf16String("7"),
+        0xafb: Memory.allocUtf16String("4"),
+        0x552: Memory.allocUtf16String("6"),
+        0x3ad: Memory.allocUtf16String("CAMBIOS")
+    };
+    coinLog("install half-length label hook LookupString=" + LookupString);
+    Interceptor.attach(LookupString, {
+        onEnter: function (args) {
+            this.label = labels[args[0].toInt32()];
+        },
+        onLeave: function (retval) {
+            if (this.label !== undefined) {
+                retval.replace(this.label);
+            }
+        }
+    });
+}
+
+function installWorldTrophyUnlock(mod) {
+    var GetTournamentComplete = mod.base.add(0x001c9ccc); // CProfileFeats::GetTournamentComplete(int)
+    var WorldTrophySaveExists = mod.base.add(0x0032ab5c); // CSeason::WorldTrophySaveExists()
+    var worldTrophyIds = {
+        11: true, // trophy_internationalcup.png
+        49: true, // World Trophy / international cup variants
+        50: true
+    };
+    coinLog("install world trophy hooks GetTournamentComplete=" + GetTournamentComplete + " WorldTrophySaveExists=" + WorldTrophySaveExists);
+    Interceptor.attach(GetTournamentComplete, {
+        onEnter: function (args) {
+            this.tournId = args[1].toInt32();
+        },
+        onLeave: function (retval) {
+            if (worldTrophyIds[this.tournId]) {
+                retval.replace(1);
+                coinLog("World trophy completion forced id=" + this.tournId);
+            }
+        }
+    });
+    Interceptor.attach(WorldTrophySaveExists, {
+        onLeave: function (retval) {
+            retval.replace(1);
+            coinLog("World trophy save exists forced");
+        }
+    });
+}
+
+// Extra player skin-tone variants (3..7, on top of the original 0..2) per
+// tone category, without touching the game's own fixed 6x3 texture array
+// (unknown allocated size -- writing past it would corrupt neighboring
+// data). Instead: piggyback extra CXGSTextureManager::LoadTexture calls
+// right after the game's own 3rd (index 2) load per category, reusing the
+// SAME already-built CXGSTexLoadOptions the game passes for that call, and
+// keep the results in our own array.
+//
+// CGfxCharacter::SetupPlayer writes the per-player skin handle into
+// this+0xa04 using (category*3+variant), then calls
+// CGfxCharacter::CreateAtlasTextures(this, playerInfo, ...) BEFORE
+// returning -- that call is what actually bakes this+0xa04 into the
+// rendered atlas. A hook on SetupPlayer's onLeave (as originally tried)
+// fires AFTER CreateAtlasTextures already consumed the wrong (clamped)
+// handle, which desyncs the engine's texture bookkeeping and renders as a
+// blank/white player. So: clamp the out-of-range variant (param_1+0x49) in
+// SetupPlayer.onEnter as before, but apply the real handle by hooking
+// CreateAtlasTextures's own entry (a safe function-boundary hook) and
+// patching this+0xa04 there, right before it runs.
+// Buffered file logging: hook callbacks only push a string into memory
+// (cheap, no I/O on the game's own thread); a timer flushes the buffer to
+// disk periodically off that hot path.
+var logBuffer = [];
+function logLine(obj) {
+    try { logBuffer.push(new Date().toISOString() + ' ' + JSON.stringify(obj)); } catch (e) {}
+}
+setInterval(function () {
+    if (logBuffer.length === 0) return;
+    var lines = logBuffer.splice(0, logBuffer.length);
+    try {
+        var f = new File("/storage/emulated/0/Android/data/com.FTS27.giiodroicerargaming/files/skin_debug.log", "a");
+        f.write(lines.join("\n") + "\n");
+        f.flush();
+        f.close();
+    } catch (e) {}
+}, 2000);
+
+function installSkinVariants(mod) {
+    var LoadTexture = mod.base.add(0x003a78bc);         // CXGSTextureManager::LoadTexture(char const*, CXGSTexLoadOptions const&)
+    var SetupPlayer  = mod.base.add(0x0017c294);         // CGfxCharacter::SetupPlayer(TPlayerInfo*, bool, int)
+    var CreateAtlasTextures = mod.base.add(0x0017ef70);  // CGfxCharacter::CreateAtlasTextures(TPlayerInfo*, int, int, int, int)
+    var fnLoadTexture = new NativeFunction(LoadTexture, 'int32', ['pointer', 'pointer', 'pointer']);
+
+    var EXTRA_VARIANTS = 5;           // adds variants 3..7 on top of the original 0..2
+    var TOTAL_VARIANTS = 3 + EXTRA_VARIANTS;
+
+    // categoryIndex assigned in first-seen load order, matching the game's
+    // own array layout (category*3 + variant), so it lines up with the
+    // param_1[0x4e] byte the game already stores per player.
+    var categoryOrder = [];           // name -> index, by discovery order
+    var categoryIndexOf = {};
+    var extraHandles = {};            // "catIdx:variantIdx(3..7)" -> texture handle (int)
+    var pendingOverride = {};         // CGfxCharacter* (as string) -> { key }
+
+    Interceptor.attach(LoadTexture, {
+        onEnter: function (args) {
+            this.self = args[0];
+            this.pathPtr = args[1];
+            this.optsPtr = args[2];
+            this.path = null;
+            try { this.path = args[1].readUtf8String(); } catch (e) {}
+        },
+        onLeave: function (retval) {
+            if (!this.path) return;
+            var m = /skin_([a-z]+)_([0-9])\.png/.exec(this.path);
+            if (!m) return;
+            var category = m[1];
+            var variant = parseInt(m[2], 10);
+            if (variant !== 2) return; // piggyback right after the 3rd (last original) load
+
+            if (!(category in categoryIndexOf)) {
+                categoryIndexOf[category] = categoryOrder.length;
+                categoryOrder.push(category);
+            }
+            var catIdx = categoryIndexOf[category];
+            var prefix = this.path.substring(0, this.path.indexOf('skin_'));
+
+            for (var v = 3; v < TOTAL_VARIANTS; v++) {
+                try {
+                    var extraPath = Memory.allocUtf8String(prefix + 'skin_' + category + '_' + v + '.png');
+                    var handle = fnLoadTexture(this.self, extraPath, this.optsPtr);
+                    extraHandles[catIdx + ':' + v] = handle;
+                    logLine({ tag: 'skin-extra-loaded', category: category, catIdx: catIdx, variant: v, handle: handle });
+                } catch (e) {
+                    logLine({ tag: 'skin-extra-load-failed', category: category, variant: v, error: '' + e });
+                }
+            }
+        }
+    });
+
+    Interceptor.attach(SetupPlayer, {
+        onEnter: function (args) {
+            this.thisPtr = args[0];
+            this.playerInfo = args[1];
+            this.clamped = false;
+            if (this.playerInfo.isNull()) return;
+            var variantAddr = this.playerInfo.add(0x49);
+            var variant = variantAddr.readU8();
+            if (variant >= 3) {
+                var category = this.playerInfo.add(0x4e).readU8();
+                var key = category + ':' + variant;
+                var found = key in extraHandles;
+                if (found) {
+                    pendingOverride[this.thisPtr.toString()] = key;
+                }
+                variantAddr.writeU8(0); // safe in-range value while the original runs
+                this.origVariant = variant;
+                this.clamped = true;
+                logLine({ tag: 'setup-clamped', thisPtr: this.thisPtr.toString(), variant: variant, category: category, key: key, foundInExtraHandles: found });
+            }
+        },
+        onLeave: function () {
+            if (!this.clamped) return;
+            this.playerInfo.add(0x49).writeU8(this.origVariant); // restore the real DB value
+        }
+    });
+
+    // Fires while this+0xa04 still holds the safe/clamped handle SetupPlayer
+    // just wrote, and BEFORE the atlas gets baked from it.
+    Interceptor.attach(CreateAtlasTextures, {
+        onEnter: function (args) {
+            var thisKey = args[0].toString();
+            var key = pendingOverride[thisKey];
+            if (key === undefined) return;
+            delete pendingOverride[thisKey];
+            var a04Before = args[0].add(0xa04).readU32();
+            var applied = false;
+            if (key in extraHandles) {
+                args[0].add(0xa04).writeU32(extraHandles[key]);
+                applied = true;
+            }
+            logLine({ tag: 'atlas-override', thisPtr: thisKey, key: key, a04Before: a04Before, a04After: applied ? extraHandles[key] : a04Before, applied: applied });
+        }
+    });
+}
+
+// libFTS15.so may not be loaded yet at gadget-init time; poll briefly until it is.
+function waitForModuleThenInstall() {
+    var mod = Process.findModuleByName("libFTS15.so");
+    if (mod !== null) {
+        install();
+    } else {
+        setTimeout(waitForModuleThenInstall, 250);
+    }
+}
+waitForModuleThenInstall();

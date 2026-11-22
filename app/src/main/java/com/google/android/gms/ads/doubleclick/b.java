@@ -1,0 +1,6 @@
+package com.google.android.gms.ads.doubleclick;
+
+/* JADX INFO: loaded from: classes.dex */
+public interface b {
+    void a(a aVar);
+}

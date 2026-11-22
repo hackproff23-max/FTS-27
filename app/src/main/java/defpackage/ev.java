@@ -1,0 +1,33 @@
+package defpackage;
+
+import java.io.IOException;
+import java.net.Socket;
+import java.security.GeneralSecurityException;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+
+/* JADX INFO: loaded from: classes.dex */
+public final class ev {
+    private static SSLSocketFactory a;
+    private static SSLContext b;
+    private static ew[] c = new ew[1];
+
+    public static Socket a(String str, int i, ex exVar) throws IOException, SecurityException {
+        try {
+            c[0] = new ew(exVar);
+            SSLContext sSLContext = SSLContext.getInstance("TLS");
+            b = sSLContext;
+            sSLContext.init(null, c, null);
+            a = b.getSocketFactory();
+            return a.createSocket(str, i);
+        } catch (KeyManagementException e) {
+            throw new SecurityException("Failed to initialize the client-side SSLContext " + e);
+        } catch (NoSuchAlgorithmException e2) {
+            throw new SecurityException("No such algorithm exception " + e2);
+        } catch (GeneralSecurityException e3) {
+            throw new SecurityException("General security exception " + e3);
+        }
+    }
+}

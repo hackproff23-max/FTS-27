@@ -1,0 +1,11 @@
+package com.google.android.gms.games.internal.game;
+
+import com.google.android.gms.common.data.DataHolder;
+import com.google.android.gms.common.data.d;
+
+/* JADX INFO: loaded from: classes.dex */
+public final class GameSearchSuggestionRef extends d implements GameSearchSuggestion {
+    GameSearchSuggestionRef(DataHolder holder, int dataRow) {
+        super(holder, dataRow);
+    }
+}

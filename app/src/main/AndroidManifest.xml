@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.FTS27.giiodroicerargaming">
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <uses-permission android:name="com.android.vending.BILLING"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.GET_ACCOUNTS"/>
+    <uses-permission android:name="com.android.vending.CHECK_LICENSE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.USE_CREDENTIALS"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-feature
+        android:glEsVersion="0x20000"
+        android:required="true"/>
+    <application
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+        android:label="@string/app_name"
+        android:icon="@drawable/fts_icon"
+        android:hasCode="true">
+        <activity
+            android:theme="@style/FTSTheme"
+            android:label="@string/app_name"
+            android:name="com.firsttouchgames.fts15.MainActivity"
+            android:clearTaskOnLaunch="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="screenSize|orientation|keyboardHidden"
+            android:alwaysRetainTaskState="true"
+            android:allowTaskReparenting="true">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="FTS15"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <service android:name="com.firsttouchgames.fts15.ExpansionDownloaderService"/>
+        <receiver android:name="com.firsttouchgames.fts15.SimpleAlarmReceiver"/>
+        <activity
+            android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen"
+            android:name="com.jirbo.adcolony.AdColonyOverlay"
+            android:configChanges="orientation|keyboardHidden"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.MainActivity"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.ButtonMain"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.Mainsb"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.IdiomaComentariosActivity"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.MainActivity"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.MainOther"/>
+        <activity
+            android:theme="@style/tabarjunaam"
+            android:name="arjuna.am.power.MainConfig"/>
+        <activity
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:name="com.jirbo.adcolony.AdColonyFullscreen"
+            android:configChanges="orientation|keyboardHidden"/>
+        <activity
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:name="com.jirbo.adcolony.AdColonyBrowser"
+            android:configChanges="orientation|keyboardHidden"/>
+        <activity
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:name="com.unity3d.ads.android.view.UnityAdsFullscreenActivity"
+            android:configChanges="fontScale|smallestScreenSize|screenSize|uiMode|screenLayout|orientation|navigation|keyboardHidden|keyboard|touchscreen|locale|mnc|mcc"/>
+        <activity
+            android:name="com.mopub.mobileads.MoPubActivity"
+            android:configChanges="screenSize|orientation|keyboardHidden"/>
+        <activity
+            android:name="com.mopub.mobileads.MraidActivity"
+            android:configChanges="screenSize|orientation|keyboardHidden"/>
+        <activity
+            android:name="com.mopub.common.MoPubBrowser"
+            android:configChanges="screenSize|orientation|keyboardHidden"/>
+        <activity
+            android:name="com.mopub.mobileads.MraidVideoPlayerActivity"
+            android:configChanges="screenSize|orientation|keyboardHidden"/>
+        <activity
+            android:name="com.google.ads.AdActivity"
+            android:configChanges="smallestScreenSize|screenSize|uiMode|screenLayout|orientation|keyboardHidden|keyboard"/>
+        <activity
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:name="com.millennialmedia.android.MMActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard"/>
+        <activity
+            android:name="com.millennialmedia.android.VideoPlayer"
+            android:configChanges="orientation|keyboardHidden|keyboard"/>
+        <meta-data
+            android:name="com.facebook.sdk.ApplicationId"
+            android:value="@string/facebook_id"/>
+        <meta-data
+            android:name="com.facebook.sdk.ApplicationName"
+            android:value="@string/app_name"/>
+        <activity
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:label="@string/app_name"
+            android:name="com.facebook.FacebookActivity"
+            android:configChanges="screenSize|screenLayout|orientation|keyboardHidden|keyboard"/>
+        <activity
+            android:label="@string/app_name"
+            android:name="com.firsttouchgames.fts15.SafeModeActivity"
+            android:clearTaskOnLaunch="true"
+            android:screenOrientation="landscape"
+            android:alwaysRetainTaskState="true"
+            android:allowTaskReparenting="true">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="FTS15"/>
+        </activity>
+        <activity
+            android:name="com.flurry.android.FlurryFullscreenTakeoverActivity"
+            android:configChanges="smallestScreenSize|screenSize|uiMode|screenLayout|orientation|keyboardHidden|keyboard"/>
+        <activity
+            android:name="com.google.android.gms.ads.AdActivity"
+            android:configChanges="smallestScreenSize|screenSize|uiMode|screenLayout|orientation|keyboardHidden|keyboard"/>
+        <receiver
+            android:name="com.firsttouchgames.util.ExternalReceiver"
+            android:permission="com.google.android.c2dm.permission.SEND">
+            <intent-filter>
+                <action android:name="com.google.android.c2dm.intent.RECEIVE"/>
+                <action android:name="com.google.android.c2dm.intent.REGISTRATION"/>
+                <category android:name="com.firsttouchgames.util"/>
+            </intent-filter>
+        </receiver>
+        <meta-data
+            android:name="applovin.sdk.key"
+            android:value="XnWZ_WRymOcz3K7CGgQA6TeuQfrodJcA47k4eA1PZdMczTpE8EOFn17Bhz-KGaULiDQMNSmx47T2bMGlaf-Mh6"/>
+        <activity android:name="com.applovin.adview.AppLovinInterstitialActivity"/>
+        <activity android:name="com.applovin.adview.AppLovinConfirmationActivity"/>
+        <meta-data
+            android:name="com.google.android.gms.version"
+            android:value="@integer/google_play_services_version"/>
+        <meta-data
+            android:name="com.google.android.gms.games.APP_ID"
+            android:value="@string/project_number"/>
+    </application>
+</manifest>
